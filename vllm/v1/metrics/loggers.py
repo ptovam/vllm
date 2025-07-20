@@ -4,6 +4,7 @@
 import logging
 import time
 from abc import ABC, abstractmethod
+from functools import partial
 from typing import Callable, Optional
 
 import numpy as np
@@ -11,6 +12,7 @@ import prometheus_client
 
 from vllm.config import SupportsMetricsInfo, VllmConfig
 from vllm.logger import init_logger
+from vllm.plugins import load_plugins_by_group
 from vllm.v1.core.kv_cache_utils import PrefixCachingMetrics
 from vllm.v1.engine import FinishReason
 from vllm.v1.metrics.prometheus import unregister_vllm_metrics
@@ -529,6 +531,23 @@ def build_1_2_5_buckets(max_value: int) -> list[int]:
     return build_buckets([1, 2, 5], max_value)
 
 
+def load_stat_logger_plugin_factories() -> list[StatLoggerFactory]:
+    factories: list[StatLoggerFactory] = []
+
+    for name, plugin_class in load_plugins_by_group(
+            "vllm.stat_logger_plugins").items():
+        if not issubclass(plugin_class, StatLoggerBase):
+            logger.warning(
+                "Stat logger plugin %s is not a subclass of StatLoggerBase. "
+                "Skipping.", name)
+            continue
+
+        logger.info("Loaded stat logger plugin: %s", name)
+        factories.append(partial(plugin_class))
+
+    return factories
+
+
 def setup_default_loggers(
     vllm_config: VllmConfig,
     log_stats: bool,
@@ -546,6 +565,9 @@ def setup_default_loggers(
         factories = [PrometheusStatLogger]
         if logger.isEnabledFor(logging.INFO):
             factories.append(LoggingStatLogger)
+
+        # Load plugin-based stat loggers
+        factories.extend(load_stat_logger_plugin_factories())
 
     stat_loggers: list[list[StatLoggerBase]] = []
     for i in range(engine_num):
